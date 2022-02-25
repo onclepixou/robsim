@@ -14,6 +14,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>. 
 
+require 'matrix'
+
 module Robsim
 	class Robot < Body
 		@@robot_counter = 0
@@ -42,6 +44,7 @@ module Robsim
 		end
 
 		def step(dt)
+
 			dxdt = @v*Math.cos(@ang)
 			dydt = @v*Math.sin(@ang)
 			dadt = rotator.cmd

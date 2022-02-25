@@ -11,13 +11,22 @@ include EZ_INTERVALS
 include EZ_ALGORITHMS
 include EZ_CONTRACTORS
 
+require 'matrix'
+
+class Integer
+    def fact
+        (1..self).reduce(:*) || 1
+    end
+end
+
 class MyBot < Robot
 	def initialize(wp)
 		super()
 		set_pos(50, 50)
+        set_speed(1)
 		set_angle(2*Math::PI*rand)
 		add_sensor LandmarkSensor.new(20)
-		set_controller PathPlanningController.new(wp)
+		set_controller PathPlanningController.new(wp, 50)
 	end
 end
 
@@ -48,13 +57,15 @@ class PathPlanningController < Controller
 
     attr_reader :pos_estimate_raw #@return Array[IntervalVector]
     attr_reader :pos_estimate     #@return [IntervalVector]
-    attr_reader :trajectory       #@return [Vec2]
-    attr_reader :waypoint_index   #@return [Integer]
+    attr_reader :trajectory       #@return Array[Matrix]
+    attr_reader :t_end            #@return Float
+    attr_reader :t
 
-    def initialize(wp)
+    def initialize(wp, tend)
         super()
         @trajectory = wp
-        @waypoint_index = 0
+        @t_end = tend
+        @t=0 
     end
 
 	def observe
@@ -74,45 +85,76 @@ class PathPlanningController < Controller
 
 	def control
 
-        x = pos_estimate[0].midpoint
-        y = pos_estimate[1].midpoint
-        pos = trajectory[waypoint_index] - Vec2.new(x, y)
-        angle =  pos.angle()
-        diff = (@controller_robot.ang - angle).abs()
+        @t = (t + @controller_robot.world.dt)
+        puts @t
+        if(pos_estimate.empty?)
+            return
+        end
 
-        if(diff > 0.3)
-            puts "rotating"
-            self.rotation = 0.5
-            self.acceleration = 0
-        else
-            puts "not rotating"
+        if((@t > @t_end))
+            @controller_robot.set_speed(0)
             self.rotation = 0
-            self.acceleration = 1
+            return
         end
-
-
-        if(next_wp_reached?)
-
-            @waypoint_index = (@waypoint_index + 1)
-            if(@waypoint_index >= trajectory.length)
-                @waypoint_index  = 0
-            end
-        end
-
-        puts "next wp is " + @waypoint_index.to_s
+       
+        x_ = pos_estimate[0].midpoint
+        y_ = pos_estimate[1].midpoint
+        #x = Matrix[[@controller_robot.pos.x, @controller_robot.pos.y, @controller_robot.ang, @controller_robot.v]]
+        x = Matrix[[x_,  y_ , @controller_robot.ang, @controller_robot.v]]
+        w=setpoint(@t/t_end)
+        dw=(1/t_end) * d_setpoint(t/t_end)
+        u=control_(x, w, dw)
+        
+        self.rotation = u[0,0]
+        self.acceleration = u[0,1]
 	end
 
-    def next_wp_reached?
-        x = pos_estimate[0].midpoint
-        y = pos_estimate[1].midpoint
-        pos = trajectory[waypoint_index] - Vec2.new(x, y)
-        distance = pos.length
-
-        if(distance <= 5)
-            return true
+    def coeff(i, n, t)
+        (n.fact()/(i.fact()*(n-i).fact())) * ((1 - t)**(n-i)) * t**i
+    end
+    
+    def d_coeff(i, n, t)
+        (n.fact()/(i.fact()*(n-i).fact())) * ((i * (1-t)**(n-i)*(t**(i-1))) - (((1-t)**(n-i-1))*(t**i)))
+    end
+    
+    def setpoint(t)
+        w = Matrix[[0],[0]]
+        n = (trajectory.length() - 1)
+        for i in 0..n do
+            w = w + ( coeff(i, n, t) * @trajectory[i])
         end
-        
-        return false
+        return w
+    end
+    
+    def d_setpoint(t)
+        dw = Matrix[[0],[0]]
+        n = (trajectory.length() - 1)
+        for i in 0..n do
+            w = dw + ( d_coeff(i, n, t) * trajectory[i])
+        end
+        return w
+    end
+    
+    def f(x, u) # state = (x, y, thetha, v)
+        xdot = Matrix[[x[0,3] * Math.cos(x[0,2]), x[0,3] * Math.sin(x[0,2]), u[0,0], u[0,1]]]
+        return xdot
+    end
+    
+    def control_(x, w, dw)
+    
+        a = Matrix[[-x[0,3] * Math.sin(x[0,2]), Math.cos(x[0,2])], 
+                   [ x[0,3] * Math.cos(x[0,2]), Math.sin(x[0,2])]]
+    
+        y = Matrix[[x[0,0]],
+                   [x[0,1]]]
+    
+        dy = Matrix[[x[0,3] * Math.cos(x[0,2])],
+                    [x[0,3] * Math.sin(x[0,2])]]
+    
+        v = ((w-y) + (2*(dw-dy)))
+    
+        u_ = a.inverse() * v
+        return Matrix[[u_[0,0], u_[1,0]]]
     end
 
     def draw(figure)
@@ -139,17 +181,27 @@ s = Simulator.new
 	s.world.add_landmark(Landmark.new(pos_x, pos_y))
 end
 
-circuit_layout = [Vec2.new(100, 100),
-                  Vec2.new( 75, 400),
-                  Vec2.new(200, 600),
-                  Vec2.new(400, 500),
-                  Vec2.new(750, 600),
-                  Vec2.new(900, 250),
-                  Vec2.new(500, 125)]
+circuit_layout = [Matrix[[100], [100]],
+                  Matrix[[100], [250]],
+                  Matrix[[100], [400]],
+                  Matrix[[125], [500]],
+                  Matrix[[150], [600]],
+                  Matrix[[200], [650]],
+                  Matrix[[300], [600]],
+                  Matrix[[400], [500]],
+                  Matrix[[425], [425]],
+                  Matrix[[450], [325]],
+                  Matrix[[500], [240]],
+                  Matrix[[600], [200]],
+                  Matrix[[670], [250]],
+                  Matrix[[700], [350]],
+                  Matrix[[800], [400]],
+                  Matrix[[900], [300]]]
+
 # circuit
 circuit_layout.each{|wp|
 
-    s.world.add_waypoint(Waypoint.new(wp.x, wp.y))
+    s.world.add_waypoint(Waypoint.new(wp[0,0], wp[1,0]))
 }
 
 s.world.add_robot(MyBot.new(circuit_layout))

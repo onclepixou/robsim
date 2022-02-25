@@ -38,6 +38,10 @@ module Robsim
 			@pos
 		end
 
+		def set_speed(speed)
+			@v = speed
+		end
+
 		def set_angle(a)
 			@ang = a.to_f
 		end
